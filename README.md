@@ -94,6 +94,76 @@ These projects demonstrate basic Kafka usage: producers, consumers, and error ha
 
 The **`saga/`** folder contains a **Spring Boot** application that implements the **Saga orchestration pattern** over Kafka, with **compensating transactions** when a step fails.
 
+### Saga Orchestration Diagram
+
+The following diagram shows how the **OrderSaga** orchestrator (inside orders-service) coordinates the flow via Kafka events and commands. Solid arrows are the **happy path**; dashed red arrows are the **compensating path** when payment fails.
+
+```mermaid
+flowchart LR
+    subgraph Client
+        A[POST /orders]
+    end
+
+    subgraph OrdersService["Orders Service :8080"]
+        O_API[Order API]
+        O_DB[(Order DB)]
+    end
+
+    subgraph Kafka["Kafka Topics"]
+        OE[orders-events]
+        OC[orders-commands]
+        PC[products-commands]
+        PE[products-events]
+        PYC[payments-commands]
+        PYE[payments-events]
+    end
+
+    subgraph OrderSaga["OrderSaga Orchestrator"]
+        SAGA[listens events\nsends commands]
+    end
+
+    subgraph ProductsService["Products Service :8081"]
+        P_API[Reserve/Cancel]
+        P_DB[(Product DB)]
+    end
+
+    subgraph PaymentsService["Payments Service :8082"]
+        PAY[Process Payment]
+    end
+
+    subgraph CCP["Credit Card Processor"]
+        CCP_API[Mock API]
+    end
+
+    A --> O_API
+    O_API --> O_DB
+    O_API -->|OrderCreatedEvent| OE
+    OE --> SAGA
+    SAGA -->|ReserveProductCommand| PC
+    PC --> P_API
+    P_API --> P_DB
+    P_API -->|ProductReservedEvent| PE
+    PE --> SAGA
+    SAGA -->|ProcessPaymentCommand| PYC
+    PYC --> PAY
+    PAY --> CCP_API
+    PAY -->|PaymentProcessedEvent| PYE
+    PYE --> SAGA
+    SAGA -->|ApproveOrderCommand| OC
+    OC --> O_API
+    O_API -->|OrderApprovedEvent| OE
+
+    %% Compensating path
+    PAY -.->|PaymentFailedEvent| PYE
+    SAGA -.->|CancelProductReservationCommand| PC
+    P_API -.->|ProductReservationCancelEvent| PE
+    SAGA -.->|RejectOrderCommand| OC
+```
+
+**Happy path (solid):** Order Created → Reserve Product → Product Reserved → Process Payment → Payment Processed → Approve Order → Order Approved.
+
+**Compensating path (dashed):** Payment Failed → Cancel Product Reservation → Product Reservation Cancelled → Reject Order → Order Rejected.
+
 ### Overview
 
 - **Orchestrator:** The **orders-service** hosts the saga orchestrator (`OrderSaga`), which listens to **events** from orders, products, and payments and sends **commands** to the respective services.
